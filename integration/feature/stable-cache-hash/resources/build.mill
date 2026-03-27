@@ -1,0 +1,8 @@
+package build
+import mill.*, javalib.*
+
+object app extends JavaModule {
+  def mvnDeps = Seq(
+    mvn"com.google.guava:guava:33.0.0-jre"
+  )
+}

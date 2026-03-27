@@ -727,9 +727,31 @@ object Jvm {
       BuildCtx.withFilesystemCheckerDisabled {
         artifacts.files
           .map(os.Path(_))
-          .map(PathRef(_, quick = true))
+          .map { p =>
+            val quick = !isInStableCache(p)
+            PathRef(p, quick = quick)
+          }
       }
     }
+
+  /**
+   * Returns true if the given path is in a stable cache location (e.g. Coursier cache,
+   * ivy2 cache) where files are immutable once written. For such paths, we use
+   * content-based hashing (quick=false) instead of mtime-based hashing (quick=true)
+   * to avoid spurious cache invalidation when timestamps change (e.g. Docker COPY).
+   *
+   * Uses `CoursierPaths.cacheDirectory()` to respect `COURSIER_CACHE` and
+   * `XDG_CACHE_HOME` overrides. Only matches `~/.ivy2/cache/` (immutable downloads),
+   * not `~/.ivy2/local/` (mutable local publishes).
+   */
+  private[mill] def isInStableCache(p: os.Path): Boolean =
+    p.startsWith(coursierCacheDir) || p.startsWith(ivy2CacheDir)
+
+  private lazy val coursierCacheDir: os.Path =
+    os.Path(coursier.paths.CoursierPaths.cacheDirectory())
+
+  private lazy val ivy2CacheDir: os.Path =
+    os.home / ".ivy2" / "cache"
 
   def jvmIndex(
       ctx: Option[mill.api.TaskCtx] = None,

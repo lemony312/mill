@@ -67,7 +67,23 @@ class MillBuildBootstrap(
   import MillBuildBootstrap.*
 
   val millBootClasspath: Seq[os.Path] = prepareMillBootClasspath(output)
-  val millBootClasspathPathRefs: Seq[PathRef] = millBootClasspath.map(PathRef(_, quick = true))
+
+  private val stablePathRefCache = new StablePathRefCache(
+    os.home / ".cache" / "mill" / "pathref-content-sigs.json"
+  )
+
+  val millBootClasspathPathRefs: Seq[PathRef] = {
+    val refs = millBootClasspath.map { p =>
+      if (StablePathRefCache.isInStableCache(p)) {
+        val sig = stablePathRefCache.getOrCompute(p)
+        PathRef(p, quick = false, sig = sig, revalidate = PathRef.Revalidate.Never)
+      } else {
+        PathRef(p, quick = true)
+      }
+    }
+    stablePathRefCache.save()
+    refs
+  }
 
   def evaluate(): RunnerState = CliImports.withValue(imports) {
     val runnerState = evaluateRec(0)
@@ -207,7 +223,8 @@ class MillBuildBootstrap(
       // Use the current frame's runClasspath (includes mvnDeps and Mill jars) but filter out
       // compile.dest and generatedScriptSources.dest since build code changes are handled
       // by codesig analysis, not by classLoaderSigHash.
-      millClassloaderSigHash = nestedState.frames.headOption match {
+      millClassloaderSigHash = {
+        val hash = nestedState.frames.headOption match {
         case Some(frame) =>
           val compileDestPath = frame.compileOutput.map(p => os.Path(p.javaPath))
           frame.runClasspath
@@ -216,12 +233,22 @@ class MillBuildBootstrap(
               !compileDestPath.contains(path) &&
               !path.toString.contains("generatedScriptSources.dest")
             }
-            .map(p => (os.Path(p.javaPath), p.sig))
+            .map { p =>
+              val path = os.Path(p.javaPath)
+              val sig =
+                if (StablePathRefCache.isInStableCache(path))
+                  stablePathRefCache.getOrCompute(path)
+                else p.sig
+              (path, sig)
+            }
             .hashCode()
         case None =>
           millBootClasspathPathRefs
             .map(p => (os.Path(p.javaPath), p.sig))
             .hashCode()
+        }
+        stablePathRefCache.save()
+        hash
       },
       millClassloaderIdentityHash = nestedState
         .frames
